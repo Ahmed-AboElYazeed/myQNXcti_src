@@ -1,0 +1,26 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 6bfabf4..6764df3 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -9,7 +9,7 @@
+ #  compile, using preprocessor checks for platform-specific bits instead of
+ #  testing in here.
+ 
+-cmake_minimum_required(VERSION 2.8.12)
++cmake_minimum_required(VERSION 3.5)
+ 
+ project(PhysicsFS)
+ set(PHYSFS_VERSION 3.0.3)
+diff --git a/src/physfs_platforms.h b/src/physfs_platforms.h
+index d4e4bfd..92cbb94 100644
+--- a/src/physfs_platforms.h
++++ b/src/physfs_platforms.h
+@@ -66,7 +66,7 @@
+ #  define PHYSFS_NO_CDROM_SUPPORT 1
+ #  define PHYSFS_PLATFORM_UNIX 1
+ #  define PHYSFS_PLATFORM_POSIX 1
+-#elif defined(__QNX__)
++#elif defined(__QNX__) || defined(__QNXNTO__)
+ #  define PHYSFS_PLATFORM_QNX 1
+ #  define PHYSFS_PLATFORM_POSIX 1
+ #elif defined(unix) || defined(__unix__)

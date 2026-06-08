@@ -1,0 +1,1812 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index d65157f56..75eb05c0e 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1479,15 +1479,12 @@ elseif(UNIX AND NOT APPLE AND NOT RISCOS AND NOT HAIKU)
+         file(GLOB AIX_AUDIO_SOURCES ${SDL2_SOURCE_DIR}/src/audio/paudio/*.c)
+         list(APPEND SOURCE_FILES ${AIX_AUDIO_SOURCES})
+         set(HAVE_SDL_AUDIO TRUE)
+-    elseif(QNX)
+-        set(SDL_AUDIO_DRIVER_QSA 1)
+-        file(GLOB QSA_AUDIO_SOURCES ${SDL2_SOURCE_DIR}/src/audio/qsa/*.c)
+-        list(APPEND SOURCE_FILES ${QSA_AUDIO_SOURCES})
+-        list(APPEND EXTRA_LIBS asound)
+-        set(HAVE_SDL_AUDIO TRUE)
+     endif()
+     CheckOSS()
+     CheckALSA()
++    if(QNX AND NOT TARGET ALSA::ALSA)
++      set(HAVE_SDL_AUDIO FALSE)
++    endif()
+     CheckJACK()
+     CheckPipewire()
+     CheckPulseAudio()
+@@ -1690,6 +1687,12 @@ elseif(UNIX AND NOT APPLE AND NOT RISCOS AND NOT HAIKU)
+       list(APPEND SOURCE_FILES ${JOYSTICK_SOURCES})
+       set(HAVE_SDL_JOYSTICK TRUE)
+     endif()
++    if(QNX)
++      set(SDL_JOYSTICK_QNX 1)
++      file(GLOB QNX_JOYSTICK_SOURCES ${SDL2_SOURCE_DIR}/src/joystick/qnx/*.c)
++      list(APPEND SOURCE_FILES ${QNX_JOYSTICK_SOURCES})
++      set(HAVE_SDL_JOYSTICK TRUE)
++    endif()
+   endif()
+ 
+   CheckPTHREAD()
+diff --git a/configure b/configure
+index 3b401e6ac..2673e5177 100755
+--- a/configure
++++ b/configure
+@@ -28785,7 +28785,7 @@ printf "%s\n" "#define SDL_AUDIO_DRIVER_AAUDIO 1" >>confdefs.h
+ 
+                 have_audio=yes
+             ;;
+-            nto)
++            *-*-nto*)
+                 CheckQNXAudio
+             ;;
+           esac
+@@ -28821,6 +28821,13 @@ printf "%s\n" "#define SDL_JOYSTICK_ANDROID 1" >>confdefs.h
+                 SOURCES="$SOURCES $srcdir/src/joystick/steam/*.c"
+                 have_joystick=yes
+             ;;
++            *-*-nto*)
++
++printf "%s\n" "#define SDL_JOYSTICK_QNX 1" >>confdefs.h
++
++                SOURCES="$SOURCES $srcdir/src/joystick/qnx/*.c"
++                have_joystick=yes
++            ;;
+           esac
+         fi
+         # Set up files for the haptic library
+diff --git a/configure.ac b/configure.ac
+index 543600172..36b0cb077 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -3931,6 +3931,11 @@ case "$host" in
+                 SOURCES="$SOURCES $srcdir/src/joystick/steam/*.c"
+                 have_joystick=yes
+             ;;
++            nto)
++                AC_DEFINE(SDL_JOYSTICK_QNX, 1, [ ])
++                SOURCES="$SOURCES $srcdir/src/joystick/qnx/*.c"
++                have_joystick=yes
++            ;;
+           esac
+         fi
+         # Set up files for the haptic library
+diff --git a/include/SDL_config.h.cmake b/include/SDL_config.h.cmake
+index ef014e7dd..40776ddda 100644
+--- a/include/SDL_config.h.cmake
++++ b/include/SDL_config.h.cmake
+@@ -344,6 +344,7 @@
+ #cmakedefine SDL_JOYSTICK_IOKIT @SDL_JOYSTICK_IOKIT@
+ #cmakedefine SDL_JOYSTICK_MFI @SDL_JOYSTICK_MFI@
+ #cmakedefine SDL_JOYSTICK_LINUX @SDL_JOYSTICK_LINUX@
++#cmakedefine SDL_JOYSTICK_QNX @SDL_JOYSTICK_QNX@
+ #cmakedefine SDL_JOYSTICK_OS2 @SDL_JOYSTICK_OS2@
+ #cmakedefine SDL_JOYSTICK_USBHID @SDL_JOYSTICK_USBHID@
+ #cmakedefine SDL_HAVE_MACHINE_JOYSTICK_H @SDL_HAVE_MACHINE_JOYSTICK_H@
+diff --git a/include/SDL_config.h.in b/include/SDL_config.h.in
+index 0d9fa1427..2c525c8ed 100644
+--- a/include/SDL_config.h.in
++++ b/include/SDL_config.h.in
+@@ -326,6 +326,7 @@
+ #undef SDL_JOYSTICK_IOKIT
+ #undef SDL_JOYSTICK_MFI
+ #undef SDL_JOYSTICK_LINUX
++#undef SDL_JOYSTICK_QNX
+ #undef SDL_JOYSTICK_ANDROID
+ #undef SDL_JOYSTICK_OS2
+ #undef SDL_JOYSTICK_USBHID
+diff --git a/src/audio/alsa/SDL_alsa_audio.c b/src/audio/alsa/SDL_alsa_audio.c
+index 3e0e7acaf..cc1f53d71 100644
+--- a/src/audio/alsa/SDL_alsa_audio.c
++++ b/src/audio/alsa/SDL_alsa_audio.c
+@@ -505,6 +505,14 @@ static int ALSA_set_buffer_size(_THIS, snd_pcm_hw_params_t *params)
+         return -1;
+     }
+ 
++#if defined(__QNXNTO__)
++    /* Re-fetch the period size now that parameters are finalized */
++    status = ALSA_snd_pcm_hw_params_get_period_size(hwparams, &persize, 0);
++    if (status < 0) {
++        return -1;
++    }
++#endif
++
+     this->spec.samples = persize;
+ 
+     /* This is useful for debugging */
+diff --git a/src/joystick/SDL_joystick.c b/src/joystick/SDL_joystick.c
+index e96828859..529e681b1 100644
+--- a/src/joystick/SDL_joystick.c
++++ b/src/joystick/SDL_joystick.c
+@@ -107,7 +107,10 @@ static SDL_JoystickDriver *SDL_joystick_drivers[] = {
+     &SDL_N3DS_JoystickDriver
+ #endif
+ #if defined(SDL_JOYSTICK_DUMMY) || defined(SDL_JOYSTICK_DISABLED)
+-        &SDL_DUMMY_JoystickDriver
++    &SDL_DUMMY_JoystickDriver
++#endif
++#ifdef SDL_JOYSTICK_QNX
++    &SDL_QNX_JoystickDriver,
+ #endif
+ };
+ 
+@@ -642,6 +645,7 @@ int SDL_JoystickInit(void)
+ 
+     SDL_InitSteamVirtualGamepadInfo();
+ 
++    //fprintf(stderr, "SDL_JoystickInit: # joystick drivers:  %d\n", SDL_arraysize(SDL_joystick_drivers));
+     status = -1;
+     for (i = 0; i < SDL_arraysize(SDL_joystick_drivers); ++i) {
+         if (SDL_joystick_drivers[i]->Init() >= 0) {
+@@ -653,6 +657,7 @@ int SDL_JoystickInit(void)
+     if (status < 0) {
+         SDL_JoystickQuit();
+     }
++    //fprintf(stderr, "SDL_JoystickInit: status:  %d\n", status);
+ 
+     return status;
+ }
+@@ -668,6 +673,8 @@ int SDL_NumJoysticks(void)
+         total_joysticks += SDL_joystick_drivers[i]->GetCount();
+     }
+     SDL_UnlockJoysticks();
++
++    //fprintf(stderr, "SDL_NumJoysticks: total_joysticks:  %d\n", total_joysticks);
+     return total_joysticks;
+ }
+ 
+diff --git a/src/joystick/SDL_sysjoystick.h b/src/joystick/SDL_sysjoystick.h
+index cabb69af5..72d92d21d 100644
+--- a/src/joystick/SDL_sysjoystick.h
++++ b/src/joystick/SDL_sysjoystick.h
+@@ -253,6 +253,9 @@ extern SDL_JoystickDriver SDL_PS2_JoystickDriver;
+ extern SDL_JoystickDriver SDL_PSP_JoystickDriver;
+ extern SDL_JoystickDriver SDL_VITA_JoystickDriver;
+ extern SDL_JoystickDriver SDL_N3DS_JoystickDriver;
++#ifdef SDL_JOYSTICK_QNX
++extern SDL_JoystickDriver SDL_QNX_JoystickDriver;
++#endif
+ 
+ /* Ends C function definitions when using C++ */
+ #ifdef __cplusplus
+diff --git a/src/joystick/qnx/joystick.c b/src/joystick/qnx/joystick.c
+new file mode 100644
+index 000000000..6108d18c9
+--- /dev/null
++++ b/src/joystick/qnx/joystick.c
+@@ -0,0 +1,492 @@
++/*
++  Simple DirectMedia Layer
++  Copyright (C) 2025 BlackBerry Limited
++
++  This software is provided 'as-is', without any express or implied
++  warranty.  In no event will the authors be held liable for any damages
++  arising from the use of this software.
++
++  Permission is granted to anyone to use this software for any purpose,
++  including commercial applications, and to alter it and redistribute it
++  freely, subject to the following restrictions:
++
++  1. The origin of this software must not be misrepresented; you must not
++     claim that you wrote the original software. If you use this software
++     in a product, an acknowledgment in the product documentation would be
++     appreciated but is not required.
++  2. Altered source versions must be plainly marked as such, and must not be
++     misrepresented as being the original software.
++  3. This notice may not be removed or altered from any source distribution.
++*/
++
++#include "../../SDL_internal.h"
++
++#ifdef SDL_JOYSTICK_QNX
++
++#include "SDL.h"
++#include "../../joystick/SDL_joystick_c.h"
++#include "../../joystick/SDL_sysjoystick.h"
++#include "SDL_events.h"
++#include "SDL_joystick.h"
++#include "SDL_gamecontroller.h"
++
++
++/*===========  SDL Headers  =============*/
++#include "../../video/qnx/sdl_qnx.h"
++#include "errno.h"
++
++#include "sys/usbdi.h"
++
++#define SCREEN_MASK_LENGTH 20
++
++extern screen_context_t context;
++//extern screen_event_t   event;
++
++// QNX-specific struct
++typedef struct joystick_hwdata{
++    unsigned last_buttons, current_buttons; //as screen buttons
++    int    device; //SCREEN_PROPERTY_ID
++    int analog0_x, analog0_y; //as screen outputs
++    int analog1_x, analog1_y; //see above
++    int a0x_up, a0y_up, a1x_up, a1y_up;
++    struct joystick_hwdata* next;
++    SDL_Joystick* attached; //back n forth attachment
++} js_hwdata_t;
++
++// Globals for our use.
++js_hwdata_t* data_list = NULL;
++SDL_JoystickID next_id = 0;
++int has_init = 0;
++
++Uint8 button_to_SDL(unsigned button){
++    if( button & SCREEN_A_GAME_BUTTON) return SDL_CONTROLLER_BUTTON_A;
++    if( button & SCREEN_B_GAME_BUTTON) return SDL_CONTROLLER_BUTTON_B;
++    if( button & SCREEN_X_GAME_BUTTON) return SDL_CONTROLLER_BUTTON_X;
++    if( button & SCREEN_Y_GAME_BUTTON) return SDL_CONTROLLER_BUTTON_Y;
++    if( button & SCREEN_MENU1_GAME_BUTTON) return SDL_CONTROLLER_BUTTON_START;
++    if( button & SCREEN_MENU2_GAME_BUTTON) return SDL_CONTROLLER_BUTTON_BACK;
++    if( button & SCREEN_MENU3_GAME_BUTTON) return SDL_CONTROLLER_BUTTON_GUIDE;
++    if( button & SCREEN_L1_GAME_BUTTON) return SDL_CONTROLLER_BUTTON_LEFTSHOULDER;
++    if( button & SCREEN_L2_GAME_BUTTON) return SDL_CONTROLLER_BUTTON_LEFTSHOULDER;
++    if( button & SCREEN_L3_GAME_BUTTON) return SDL_CONTROLLER_BUTTON_LEFTSTICK;
++    if( button & SCREEN_R1_GAME_BUTTON) return SDL_CONTROLLER_BUTTON_RIGHTSHOULDER;
++    if( button & SCREEN_R2_GAME_BUTTON) return SDL_CONTROLLER_BUTTON_RIGHTSHOULDER;
++    if( button & SCREEN_R3_GAME_BUTTON) return SDL_CONTROLLER_BUTTON_RIGHTSTICK;
++    if( button & SCREEN_DPAD_UP_GAME_BUTTON) return    SDL_CONTROLLER_BUTTON_DPAD_UP;
++    if( button & SCREEN_DPAD_DOWN_GAME_BUTTON) return SDL_CONTROLLER_BUTTON_DPAD_DOWN;
++    if( button & SCREEN_DPAD_LEFT_GAME_BUTTON) return SDL_CONTROLLER_BUTTON_DPAD_LEFT;
++    if( button & SCREEN_DPAD_RIGHT_GAME_BUTTON) return SDL_CONTROLLER_BUTTON_DPAD_RIGHT;
++    return 0xFF;
++}
++
++//##################################################################
++//Helper functions
++
++SDL_JoystickID deviceid_to_joystickid(int device){
++    struct joystick_hwdata* next;
++
++    next = data_list;
++    while(next){
++        if(next->device == device)
++            return (next->attached)? next->attached->instance_id: -1;
++        next = next->next;
++    }
++    return -1;
++}
++
++struct joystick_hwdata* deviceid_to_hwdata(int device){
++    struct joystick_hwdata * hwdata = NULL;
++
++    hwdata = data_list;
++    while(hwdata){
++        if(hwdata->device == device) return hwdata;
++        hwdata = hwdata->next;
++    }
++
++    return NULL;
++}
++
++SDL_Joystick* deviceid_to_joystick(int device){
++    struct joystick_hwdata* next;
++
++    next = data_list;
++    while(next){
++        if(next->device == device)
++            return (next->attached)? next->attached: NULL;
++        next = next->next;
++    }
++    return NULL;
++}
++
++SDL_Joystick* index_to_joystick(int index){
++    struct joystick_hwdata* next;
++    int check = 0;
++
++    check = SDL_NumJoysticks();
++    if(index > check) return NULL;
++
++    while(next){
++        if(index < 0) return NULL;
++        if(index == 0) return (next->attached)? next->attached: NULL;
++        index--;
++        next = next->next;
++    }
++
++    return NULL;
++}
++
++struct joystick_hwdata* index_to_hwdata(int index){
++    struct joystick_hwdata* next;
++    int check = 0;
++
++    check = SDL_NumJoysticks();
++    if(index > check) return NULL;
++
++    next = data_list;
++    while(next != NULL){
++        if(index < 0) return NULL;
++        if(index == 0) return next;
++        index--;
++        next = next->next;
++    }
++
++    return NULL;
++}
++
++struct joystick_hwdata * alloc_hwdata(int dev){
++    struct joystick_hwdata *ptr, *temp;
++    int index = 0;
++
++    ptr = malloc(sizeof(struct joystick_hwdata));
++    ptr->device = dev;
++    ptr->next = NULL;
++    ptr->attached = NULL;
++
++    ptr->current_buttons = 0;
++    ptr->last_buttons = 0;
++
++    ptr->analog0_x = 0;
++    ptr->analog0_y = 0;
++    ptr->analog1_x = 0;
++    ptr->analog1_y = 0;
++
++    ptr->a0x_up = 0;
++    ptr->a0y_up = 0;
++    ptr->a1x_up = 0;
++    ptr->a1y_up = 0;
++
++    if(data_list){
++        temp = data_list;
++        while(temp->next) {
++            temp = temp->next;
++	    index++;
++	}
++        temp->next = ptr;
++    }else{
++        data_list = ptr;
++    }
++    SDL_PrivateJoystickAdded(index);
++
++    return ptr;
++}
++
++int convert_to_SDL_sticksize(int convert, int screen_max){
++    convert = convert - (screen_max/2); //centre
++    screen_max = screen_max/2;
++    while(screen_max > SDL_JOYSTICK_AXIS_MAX){
++        screen_max = screen_max/2;
++        convert = convert >> 1;
++    }
++
++    // if(screen_max < (SDL_JOYSTICK_AXIS_MAX - SDL_JOYSTICK_AXIS_MIN +1))
++        //convert = (convert * (SDL_JOYSTICK_AXIS_MAX - SDL_JOYSTICK_AXIS_MIN +1))/screen_max; //scaleup
++    // if(screen_max > (SDL_JOYSTICK_AXIS_MAX - SDL_JOYSTICK_AXIS_MIN +1))
++    //     convert = convert / (screen_max/(SDL_JOYSTICK_AXIS_MAX - SDL_JOYSTICK_AXIS_MIN +1));
++
++    // if(convert < SDL_JOYSTICK_AXIS_MIN) convert =  SDL_JOYSTICK_AXIS_MIN;
++    // if(convert > SDL_JOYSTICK_AXIS_MAX) convert =  SDL_JOYSTICK_AXIS_MAX;
++
++    return convert;
++}
++
++void QNX_JoystickUpdate(SDL_Joystick * joystick);
++
++/**
++ * Handles screen joystick or gamepad.
++ */
++void handleJoystickEvent(screen_event_t event){
++    struct joystick_hwdata * stick;
++    int screen_button_out=0;
++    screen_device_t temp;
++    int deviceid, size;
++    int analog[3] = {0, 0, 0};
++
++    if(has_init < 10){has_init++; return;}
++
++    if(!event) return;
++
++    screen_get_event_property_iv(event, SCREEN_PROPERTY_BUTTONS, &screen_button_out);
++
++    //fprintf(stderr, "qnx/joystick.c: | handleJoystickEvent: screen_button_out: %d\n", screen_button_out);
++
++    if(screen_get_event_property_pv(event, SCREEN_PROPERTY_DEVICE, (void**)&temp)!=0) return;
++    if(!temp) return;
++
++    //fprintf(stderr, "qnx/joystick.c: | handleJoystickEvent: device: %d\n", temp);
++
++    if(screen_get_device_property_iv(temp, SCREEN_PROPERTY_ID, &deviceid)) return;
++
++    //fprintf(stderr, "qnx/joystick.c: | handleJoystickEvent: device ID: %d\n", deviceid);
++
++    stick = deviceid_to_hwdata(deviceid);
++
++    if(!stick)
++        stick = alloc_hwdata(deviceid);
++    if(!stick) return;
++
++    //fprintf(stderr, "qnx/joystick.c: | handleJoystickEvent: stick: %x\n", stick);
++
++    stick->current_buttons = screen_button_out;
++
++    screen_get_event_property_iv(event, SCREEN_PROPERTY_SIZE, &size);
++
++    if(size > 0){
++        if(screen_get_event_property_iv(event, SCREEN_PROPERTY_ANALOG0, analog)==0){
++            stick->analog0_x = convert_to_SDL_sticksize(analog[0], size); stick->a0x_up = 1;
++            stick->analog0_y = convert_to_SDL_sticksize(analog[1], size); stick->a0y_up = 1;
++        }
++        if(screen_get_event_property_iv(event, SCREEN_PROPERTY_ANALOG1, analog)==0){
++            stick->analog1_x = convert_to_SDL_sticksize(analog[0], size); stick->a1x_up = 1;
++            stick->analog1_y = convert_to_SDL_sticksize(analog[1], size); stick->a1y_up = 1;
++        }
++    }
++
++    if(stick->attached){
++        if(SDL_PrivateJoystickValid(stick->attached)){
++            QNX_JoystickUpdate(stick->attached);
++        }
++    }
++}
++
++
++//###################################################################
++void QNX_JoystickDetect(void) {
++}
++
++//##################################################################
++
++// Detects for joysticks and returns a count.
++
++int QNX_NumJoysticks(void){
++    struct joystick_hwdata* sticks = data_list;
++    int count = 0;
++
++    while(sticks){
++        count++;
++        sticks = sticks->next;
++    }
++
++    //fprintf(stderr, "qnx/joystick.c: | QNX_NumJoysticks: %d\n", count);
++    return count;
++}
++
++int QNX_JoystickInit(void){
++    //SDL_joystick_allows_background_events = SDL_TRUE;
++    //fprintf(stderr, "qnx/joystick.c: | QNX_JoystickInit\n");
++    return QNX_NumJoysticks();
++}
++
++void QNX_JoystickQuit(void){
++    //free all?
++    //fprintf(stderr, "qnx/joystick.c: | QNX_JoystickQuit\n");
++}
++
++const char * QNX_JoystickNameForDeviceIndex(int device_index){
++    return "qnx_joypad"; //TODO: Actual device name
++}
++
++SDL_JoystickID QNX_GetInstanceIdOfDeviceIndex(int device_index){
++    SDL_Joystick* stick;
++    stick = index_to_joystick(device_index);
++    return (stick)? stick->instance_id: -1;
++}
++
++int QNX_JoystickOpen(SDL_Joystick * joystick, int device_index){
++    struct joystick_hwdata* data;
++
++    if(!joystick) return -1;
++    if(!SDL_PrivateJoystickValid(joystick)) return 1;
++
++    data = index_to_hwdata(device_index);
++
++    if(data == NULL) return -1;
++    if(data->attached != NULL) return -1;
++
++    joystick->hwdata = data;
++    data->attached = joystick;
++
++    joystick->naxes = 4; //HARD CODED BY SCREEN //DISABLED FOR NOW TODO
++    joystick->nballs = 0;
++    joystick->nbuttons = 15; //SET BY SDL BUTTON MAX INDEX (0to14 = 15)
++    return 0;
++}
++
++SDL_bool QNX_JoystickAttached(SDL_Joystick *joystick){
++    return joystick->hwdata? SDL_TRUE: SDL_FALSE;
++}
++
++SDL_JoystickGUID QNX_JoystickGetDeviceGUID(int device_index){
++    SDL_JoystickGUID toReturn;
++
++    for (int i = 0; i < 16; i++) toReturn.data[i] = 0;
++
++    return toReturn;
++}
++
++void QNX_JoystickClose(SDL_Joystick* joystick){
++    struct joystick_hwdata* data = joystick->hwdata;
++    joystick->hwdata = NULL;
++    data->attached = NULL;
++    SDL_PrivateJoystickRemoved(joystick->instance_id);
++}
++
++void QNX_JoystickUpdate(SDL_Joystick * joystick){
++    unsigned diff, release, press;
++
++    if(!joystick) return;
++    if(!(joystick->hwdata)) return;
++
++    diff = joystick->hwdata->current_buttons ^ joystick->hwdata->last_buttons;
++    release = joystick->hwdata->last_buttons & diff;
++    press = joystick->hwdata->current_buttons & diff;
++
++    if(joystick->hwdata->a0x_up == 1){
++        joystick->hwdata->a0x_up = 0;
++        SDL_PrivateJoystickAxis(joystick, SDL_CONTROLLER_AXIS_LEFTX, joystick->hwdata->analog0_x);
++    }
++    if(joystick->hwdata->a0y_up == 1){
++        joystick->hwdata->a0y_up = 0;
++        SDL_PrivateJoystickAxis(joystick, SDL_CONTROLLER_AXIS_LEFTY, joystick->hwdata->analog0_y);
++    }
++    if(joystick->hwdata->a1x_up == 1){
++        joystick->hwdata->a1x_up = 0;
++        SDL_PrivateJoystickAxis(joystick, SDL_CONTROLLER_AXIS_RIGHTX, joystick->hwdata->analog1_x);
++    }
++    if(joystick->hwdata->a1y_up == 1){
++        joystick->hwdata->a1y_up = 0;
++        SDL_PrivateJoystickAxis(joystick, SDL_CONTROLLER_AXIS_RIGHTY, joystick->hwdata->analog1_y);
++    }
++
++    for (int i = 0; i < SCREEN_MASK_LENGTH; i++){
++        int button;
++        button = button_to_SDL(1 << i);
++        if(button == 0xFF) continue;
++        if((release >> i) & 0b1){
++            SDL_PrivateJoystickButton(joystick, button, SDL_RELEASED);
++        }
++        if((press >> i) & 0b1){
++            SDL_PrivateJoystickButton(joystick, button, SDL_PRESSED);
++
++        }
++    }
++
++    joystick->hwdata->last_buttons = joystick->hwdata->current_buttons;
++}
++
++SDL_JoystickGUID QNX_JoystickGetGUID(SDL_Joystick * joystick){
++    return QNX_JoystickGetDeviceGUID(0); //temporary.
++}
++
++static SDL_JoystickID QNX_JoystickGetDeviceInstanceID(int device_index)
++{
++    return device_index;
++}
++
++static const char *QNX_JoystickGetDeviceName(int device_index)
++{
++    return "qnx_joypad"; //TODO: Actual device name
++}
++
++static const char *QNX_JoystickGetDevicePath(int device_index)
++{
++    return NULL;
++}
++
++static int QNX_JoystickGetDeviceSteamVirtualGamepadSlot(int device_index)
++{
++    return -1;
++}
++
++static int QNX_JoystickGetDevicePlayerIndex(int device_index)
++{
++    return -1;
++}
++
++static void QNX_JoystickSetDevicePlayerIndex(int device_index, int player_index)
++{
++}
++
++static int QNX_JoystickRumble(SDL_Joystick *joystick, Uint16 low_frequency_rumble, Uint16 high_frequency_rumble)
++{
++    return SDL_Unsupported();
++}
++
++static int QNX_JoystickRumbleTriggers(SDL_Joystick *joystick, Uint16 left_rumble, Uint16 right_rumble)
++{
++    return SDL_Unsupported();
++}
++
++static Uint32 QNX_JoystickGetCapabilities(SDL_Joystick *joystick)
++{
++    return 0;
++}
++
++static int QNX_JoystickSetLED(SDL_Joystick *joystick, Uint8 red, Uint8 green, Uint8 blue)
++{
++    return SDL_Unsupported();
++}
++
++static int QNX_JoystickSendEffect(SDL_Joystick *joystick, const void *data, int size)
++{
++    return SDL_Unsupported();
++}
++
++static int QNX_JoystickSetSensorsEnabled(SDL_Joystick *joystick, SDL_bool enabled)
++{
++    return SDL_Unsupported();
++}
++
++static SDL_bool QNX_JoystickGetGamepadMapping(int device_index, SDL_GamepadMapping *out)
++{
++    return SDL_FALSE;
++}
++
++/***************************************************************************/
++/* Function to update the state of a joystick - called as a device poll.   */
++/* This function shouldn't update the joystick structure directly,         */
++
++SDL_JoystickDriver SDL_QNX_JoystickDriver = {
++    QNX_JoystickInit,
++    QNX_NumJoysticks,
++    QNX_JoystickDetect,
++    QNX_JoystickGetDeviceName,
++    QNX_JoystickGetDevicePath,
++    QNX_JoystickGetDeviceSteamVirtualGamepadSlot,
++    QNX_JoystickGetDevicePlayerIndex,
++    QNX_JoystickSetDevicePlayerIndex,
++    QNX_JoystickGetDeviceGUID,
++    QNX_JoystickGetDeviceInstanceID,
++    QNX_JoystickOpen,
++    QNX_JoystickRumble,
++    QNX_JoystickRumbleTriggers,
++    QNX_JoystickGetCapabilities,
++    QNX_JoystickSetLED,
++    QNX_JoystickSendEffect,
++    QNX_JoystickSetSensorsEnabled,
++    QNX_JoystickUpdate,
++    QNX_JoystickClose,
++    QNX_JoystickQuit,
++    QNX_JoystickGetGamepadMapping
++};
++
++#endif /* SDL_JOYSTICK_QNX */
+diff --git a/src/thread/pthread/SDL_systhread.c b/src/thread/pthread/SDL_systhread.c
+index 210567346..1b31c79ee 100644
+--- a/src/thread/pthread/SDL_systhread.c
++++ b/src/thread/pthread/SDL_systhread.c
+@@ -255,7 +255,12 @@ int SDL_SYS_SetThreadPriority(SDL_ThreadPriority priority)
+     if (priority == SDL_THREAD_PRIORITY_LOW) {
+         sched.sched_priority = sched_get_priority_min(policy);
+     } else if (priority == SDL_THREAD_PRIORITY_TIME_CRITICAL) {
++#if defined(__QNXNTO__)
++        /* io_snd complains about a client thread having priority >= 49 */
++        sched.sched_priority = 48;
++#else
+         sched.sched_priority = sched_get_priority_max(policy);
++#endif
+     } else {
+         int min_priority = sched_get_priority_min(policy);
+         int max_priority = sched_get_priority_max(policy);
+diff --git a/src/video/qnx/gl.c b/src/video/qnx/gl.c
+index e6e999a60..951981d7b 100644
+--- a/src/video/qnx/gl.c
++++ b/src/video/qnx/gl.c
+@@ -24,6 +24,122 @@
+ 
+ static EGLDisplay   egl_disp;
+ 
++struct DummyConfig
++{
++    int red_size;
++    int green_size;
++    int blue_size;
++    int alpha_size;
++    int native_id;
++};
++
++static struct DummyConfig getDummyConfigFromScreenSettings(window_impl_t  *impl)
++{
++    int format;
++    int rc;
++    struct DummyConfig dummyConfig= {};
++
++    rc = screen_get_window_property_iv(impl->window, SCREEN_PROPERTY_FORMAT, &format);
++   if (rc) {
++      return dummyConfig;
++   }
++
++    dummyConfig.native_id = format;
++    switch (format) {
++         case SCREEN_FORMAT_RGBX4444:
++            dummyConfig.red_size = 4;
++            dummyConfig.green_size = 4;
++            dummyConfig.blue_size = 4;
++            dummyConfig.alpha_size = 4;
++            break;
++         case SCREEN_FORMAT_RGBA5551:
++            dummyConfig.red_size = 5;
++            dummyConfig.green_size = 5;
++            dummyConfig.blue_size = 5;
++            dummyConfig.alpha_size = 1;
++            break;
++         case SCREEN_FORMAT_RGB565:
++            dummyConfig.red_size = 5;
++            dummyConfig.green_size = 6;
++            dummyConfig.blue_size = 5;
++            dummyConfig.alpha_size = 0;
++            break;
++         case SCREEN_FORMAT_RGB888:
++            dummyConfig.red_size = 8;
++            dummyConfig.green_size = 8;
++            dummyConfig.blue_size = 8;
++            dummyConfig.alpha_size = 0;
++            break;
++            case SCREEN_FORMAT_BGRA8888:
++            case SCREEN_FORMAT_BGRX8888:
++            case SCREEN_FORMAT_RGBA8888:
++         case SCREEN_FORMAT_RGBX8888:
++            dummyConfig.red_size = 8;
++            dummyConfig.green_size = 8;
++            dummyConfig.blue_size = 8;
++            dummyConfig.alpha_size = 8;
++            break;
++            default:
++                break;
++    }
++    return dummyConfig;
++}
++
++static EGLConfig chooseConfig(struct DummyConfig dummyConfig, EGLConfig* egl_configs, EGLint egl_num_configs)
++{
++   EGLConfig glConfig = (EGLConfig)0;
++
++    for (size_t ii = 0; ii < egl_num_configs; ii++) {
++        EGLint val;
++
++        eglGetConfigAttrib(egl_disp, egl_configs[ii], EGL_SURFACE_TYPE, &val);
++        if (!(val & EGL_WINDOW_BIT)) {
++            continue;
++        }
++
++        eglGetConfigAttrib(egl_disp, egl_configs[ii], EGL_RENDERABLE_TYPE, &val);
++        if (!(val & EGL_OPENGL_ES2_BIT)) {
++            continue;
++        }
++
++        eglGetConfigAttrib(egl_disp, egl_configs[ii], EGL_DEPTH_SIZE, &val);
++        if (val == 0) {
++            continue;
++        }
++      
++        eglGetConfigAttrib(egl_disp, egl_configs[ii], EGL_RED_SIZE, &val);
++        if (val != dummyConfig.red_size) {
++           continue;
++        }
++   
++        eglGetConfigAttrib(egl_disp, egl_configs[ii], EGL_GREEN_SIZE, &val);
++        if (val != dummyConfig.green_size) {
++           continue;
++        }
++
++        eglGetConfigAttrib(egl_disp, egl_configs[ii], EGL_BLUE_SIZE, &val);
++        if (val != dummyConfig.blue_size) {
++           continue;
++        }
++
++   
++        eglGetConfigAttrib(egl_disp, egl_configs[ii], EGL_ALPHA_SIZE, &val);
++        if (val != dummyConfig.alpha_size) {
++            continue;
++        }
++        if(!glConfig)
++        {
++            glConfig = egl_configs[ii];
++        }
++  
++        eglGetConfigAttrib(egl_disp, egl_configs[ii], EGL_NATIVE_VISUAL_ID, &val);
++        if ((val != 0) && (val == dummyConfig.native_id)) {
++            return egl_configs[ii];
++        }
++    }
++    return glConfig;
++}
++
+ /**
+  * Detertmines the pixel format to use based on the current display and EGL
+  * configuration.
+@@ -34,6 +150,12 @@ static int chooseFormat(EGLConfig egl_conf)
+ {
+     EGLint buffer_bit_depth;
+     EGLint alpha_bit_depth;
++    EGLint nativeid;
++
++    eglGetConfigAttrib(egl_disp, egl_conf, EGL_NATIVE_VISUAL_ID, &nativeid);
++    if (nativeid != 0) {
++        return nativeid;
++    }
+ 
+     eglGetConfigAttrib(egl_disp, egl_conf, EGL_BUFFER_SIZE, &buffer_bit_depth);
+     eglGetConfigAttrib(egl_disp, egl_conf, EGL_ALPHA_SIZE, &alpha_bit_depth);
+@@ -59,18 +181,17 @@ static int chooseFormat(EGLConfig egl_conf)
+ 
+ /**
+  * Enumerates the supported EGL configurations and chooses a suitable one.
+- * @param[out]  pconf   The chosen configuration
++ * @param[in]   impl    window implementation
+  * @param[out]  pformat The chosen pixel format
+  * @return 0 if successful, -1 on error
+  */
+-int glGetConfig(EGLConfig *pconf, int *pformat)
++int glGetConfig(window_impl_t  *impl, int *pformat)
+ {
+     EGLConfig egl_conf = (EGLConfig)0;
+     EGLConfig *egl_configs;
+     EGLint egl_num_configs;
+-    EGLint val;
+     EGLBoolean rc;
+-    EGLint i;
++    struct DummyConfig dummyconfig = {};
+ 
+     // Determine the numbfer of configurations.
+     rc = eglGetConfigs(egl_disp, NULL, 0, &egl_num_configs);
+@@ -97,28 +218,11 @@ int glGetConfig(EGLConfig *pconf, int *pformat)
+     }
+ 
+     // Find a good configuration.
+-    for (i = 0; i < egl_num_configs; i++) {
+-        eglGetConfigAttrib(egl_disp, egl_configs[i], EGL_SURFACE_TYPE, &val);
+-        if (!(val & EGL_WINDOW_BIT)) {
+-            continue;
+-        }
+-
+-        eglGetConfigAttrib(egl_disp, egl_configs[i], EGL_RENDERABLE_TYPE, &val);
+-        if (!(val & EGL_OPENGL_ES2_BIT)) {
+-            continue;
+-        }
+-
+-        eglGetConfigAttrib(egl_disp, egl_configs[i], EGL_DEPTH_SIZE, &val);
+-        if (val == 0) {
+-            continue;
+-        }
+-
+-        egl_conf = egl_configs[i];
+-        break;
+-    }
++    dummyconfig = getDummyConfigFromScreenSettings(impl);
++    egl_conf = chooseConfig(dummyconfig, egl_configs, egl_num_configs);
+ 
+     SDL_free(egl_configs);
+-    *pconf = egl_conf;
++    impl->conf = egl_conf;
+     *pformat = chooseFormat(egl_conf);
+ 
+     return 0;
+@@ -200,6 +304,7 @@ SDL_GLContext glCreateContext(_THIS, SDL_Window *window)
+     eglMakeCurrent(egl_disp, surface, surface, context);
+ 
+     impl->surface = surface;
++    impl->context = context;
+     return context;
+ }
+ 
+@@ -228,6 +333,37 @@ int glSwapWindow(_THIS, SDL_Window *window)
+ {
+     /* !!! FIXME: should we migrate this all over to use SDL_egl.c? */
+     window_impl_t   *impl = (window_impl_t *)window->driverdata;
++    {
++        if (impl->resize) {
++            EGLSurface surface;
++            struct {
++                EGLint render_buffer[2];
++                EGLint none;
++            } egl_surf_attr = {
++                .render_buffer = { EGL_RENDER_BUFFER, EGL_BACK_BUFFER },
++                .none = EGL_NONE
++            };
++
++            if (eglMakeCurrent(egl_disp, NULL, NULL, impl->context) != EGL_TRUE) {
++                return -1;
++            }
++            if (eglDestroySurface(egl_disp, impl->surface) != EGL_TRUE) {
++            }
++
++            surface = eglCreateWindowSurface(egl_disp, impl->conf, impl->window,
++                                     (EGLint *)&egl_surf_attr);
++            if (surface == EGL_NO_SURFACE) {
++                return -1;
++            }
++
++            if (eglMakeCurrent(egl_disp, surface, surface, impl->context) != EGL_TRUE) {
++                return -1;
++            }
++
++            impl->surface = surface;
++            impl->resize = 0;
++        }
++    }
+     return eglSwapBuffers(egl_disp, impl->surface) == EGL_TRUE ? 0 : -1;
+ }
+ 
+diff --git a/src/video/qnx/keyboard.c b/src/video/qnx/keyboard.c
+index 9ec289d44..3ddc6579f 100644
+--- a/src/video/qnx/keyboard.c
++++ b/src/video/qnx/keyboard.c
+@@ -1,6 +1,6 @@
+ /*
+   Simple DirectMedia Layer
+-  Copyright (C) 2017 BlackBerry Limited
++  Copyright (C) 2025 BlackBerry Limited
+ 
+   This software is provided 'as-is', without any express or implied
+   warranty.  In no event will the authors be held liable for any damages
+@@ -24,7 +24,9 @@
+ #include "SDL_scancode.h"
+ #include "SDL_events.h"
+ #include "sdl_qnx.h"
++#include "screen_consts.h"
+ #include <sys/keycodes.h>
++#include <errno.h>
+ 
+ /**
+  * A map thta translates Screen key names to SDL scan codes.
+@@ -88,6 +90,38 @@ static int key_to_sdl[] = {
+     [KEYCODE_RETURN] = SDL_SCANCODE_RETURN,
+     [KEYCODE_TAB] = SDL_SCANCODE_TAB,
+     [KEYCODE_ESCAPE] = SDL_SCANCODE_ESCAPE,
++    [KEYCODE_CAPS_LOCK] = SDL_SCANCODE_ESCAPE,
++    [KEYCODE_LEFT_CTRL] = SDL_SCANCODE_LCTRL,
++    [KEYCODE_RIGHT_CTRL] = SDL_SCANCODE_RCTRL,
++    [KEYCODE_LEFT_SHIFT] = SDL_SCANCODE_LSHIFT,
++    [KEYCODE_RIGHT_SHIFT] = SDL_SCANCODE_RSHIFT,
++    [KEYCODE_LEFT_ALT] = SDL_SCANCODE_LALT,
++    [KEYCODE_RIGHT_ALT] = SDL_SCANCODE_RALT,
++    [KEYCODE_BACKSPACE] = SDL_SCANCODE_BACKSPACE,
++    [KEYCODE_MINUS] = SDL_SCANCODE_MINUS,
++    [KEYCODE_EQUAL] = SDL_SCANCODE_EQUALS,
++    [KEYCODE_LEFT_BRACKET] = SDL_SCANCODE_LEFTBRACKET,
++    [KEYCODE_RIGHT_BRACKET] = SDL_SCANCODE_RIGHTBRACKET,
++    [KEYCODE_BACK_SLASH] = SDL_SCANCODE_BACKSLASH,
++    [KEYCODE_SEMICOLON] = SDL_SCANCODE_SEMICOLON,
++    [KEYCODE_APOSTROPHE] = SDL_SCANCODE_APOSTROPHE,
++    [KEYCODE_GRAVE] = SDL_SCANCODE_GRAVE,
++    [KEYCODE_COMMA] = SDL_SCANCODE_COMMA,
++    [KEYCODE_PERIOD] = SDL_SCANCODE_PERIOD,
++    [KEYCODE_SLASH] = SDL_SCANCODE_SLASH,
++    [KEYCODE_CAPS_LOCK] = SDL_SCANCODE_CAPSLOCK,
++    [KEYCODE_F1] = SDL_SCANCODE_F1,
++    [KEYCODE_F2] = SDL_SCANCODE_F2,
++    [KEYCODE_F3] = SDL_SCANCODE_F3,
++    [KEYCODE_F4] = SDL_SCANCODE_F4,
++    [KEYCODE_F5] = SDL_SCANCODE_F5,
++    [KEYCODE_F6] = SDL_SCANCODE_F6,
++    [KEYCODE_F7] = SDL_SCANCODE_F7,
++    [KEYCODE_F8] = SDL_SCANCODE_F8,
++    [KEYCODE_F9] = SDL_SCANCODE_F9,
++    [KEYCODE_F10] = SDL_SCANCODE_F10,
++    [KEYCODE_F11] = SDL_SCANCODE_F11,
++    [KEYCODE_F12] = SDL_SCANCODE_F12,
+ };
+ 
+ /**
+@@ -98,10 +132,20 @@ static int key_to_sdl[] = {
+ void handleKeyboardEvent(screen_event_t event)
+ {
+     int             val;
++    int             cap;
++    size_t          ascii_bytes = 2;
++    char            ascii_text[ascii_bytes];
+     SDL_Scancode    scancode;
+ 
+     // Get the key value.
+     if (screen_get_event_property_iv(event, SCREEN_PROPERTY_SYM, &val) < 0) {
++        printf("Failed to get key with errno %d\n", errno);
++        return;
++    }
++
++    if (screen_get_event_property_iv(event, SCREEN_PROPERTY_KEY_CAP,
++                                     &cap) < 0) {
++        printf("Failed to get cap with errno %d\n", errno);
+         return;
+     }
+ 
+@@ -122,10 +166,19 @@ void handleKeyboardEvent(screen_event_t event)
+     }
+ 
+     // Propagate the event to SDL.
+-    // FIXME:
+-    // Need to handle more key states (such as key combinations).
+     if (val & KEY_DOWN) {
+         SDL_SendKeyboardKey(SDL_PRESSED, scancode);
++
++        // TODO: To simplify, we're ignoring keycodes that aren't just ascii.
++        if ((val < UNICODE_PRIVATE_USE_AREA_FIRST) && ((cap & 0xFF) == cap)) {
++            ascii_text[0] = cap;
++            ascii_text[1] = 0;
++            SDL_SendKeyboardText(ascii_text);
++        } else if ((KEYCODE_PC_KEYS <= val) && (val < KEYCODE_CONSUMER_KEYS)) {
++            ascii_text[0] = val & 0xFF;
++            ascii_text[1] = 0;
++            SDL_SendKeyboardText(ascii_text);
++        }
+     } else {
+         SDL_SendKeyboardKey(SDL_RELEASED, scancode);
+     }
+diff --git a/src/video/qnx/mouse.c b/src/video/qnx/mouse.c
+new file mode 100644
+index 000000000..a5f6846aa
+--- /dev/null
++++ b/src/video/qnx/mouse.c
+@@ -0,0 +1,170 @@
++/*
++  Simple DirectMedia Layer
++  Copyright (C) 2017 BlackBerry Limited
++
++  This software is provided 'as-is', without any express or implied
++  warranty.  In no event will the authors be held liable for any damages
++  arising from the use of this software.
++
++  Permission is granted to anyone to use this software for any purpose,
++  including commercial applications, and to alter it and redistribute it
++  freely, subject to the following restrictions:
++
++  1. The origin of this software must not be misrepresented; you must not
++     claim that you wrote the original software. If you use this software
++     in a product, an acknowledgment in the product documentation would be
++     appreciated but is not required.
++  2. Altered source versions must be plainly marked as such, and must not be
++     misrepresented as being the original software.
++  3. This notice may not be removed or altered from any source distribution.
++*/
++#include "../../SDL_internal.h"
++#include "../SDL_sysvideo.h"
++#include "SDL_syswm.h"
++#include "sdl_qnx.h"
++#include "screen_consts.h"
++#include "../../events/SDL_mouse_c.h"
++
++#include <errno.h>
++
++
++// TODO: Might need to iterate all windows and attach this cursor to each of
++//       them.
++static SDL_Cursor *
++createCursor(SDL_Surface * surface, int hot_x, int hot_y)
++{
++    SDL_Cursor          *cursor;
++    cursor_impl_t       *impl;
++    screen_session_t    session;
++
++    cursor = SDL_calloc(1, sizeof(SDL_Cursor));
++    if (cursor) {
++        impl = SDL_calloc(1, sizeof(cursor_impl_t));;
++        if (impl == NULL) {
++            free(cursor);
++            SDL_OutOfMemory();
++        }
++        impl->realized_shape = SCREEN_CURSOR_SHAPE_ARROW;
++
++        screen_create_session_type(&session, context, SCREEN_EVENT_POINTER);
++        screen_set_session_property_iv(session, SCREEN_PROPERTY_CURSOR, &impl->realized_shape);
++
++        impl->session = session;
++        impl->is_visible = 1;
++        cursor->driverdata = (void*)impl;
++    } else {
++        SDL_OutOfMemory();
++    }
++
++    return cursor;
++}
++
++static SDL_Cursor *
++createSystemCursor(SDL_SystemCursor id)
++{
++    SDL_Cursor          *cursor;
++    cursor_impl_t       *impl;
++    screen_session_t    session;
++    int shape;
++
++    switch(id)
++    {
++    default:
++        SDL_assert(0);
++        return NULL;
++    case SDL_SYSTEM_CURSOR_ARROW:     shape = SCREEN_CURSOR_SHAPE_ARROW; break;
++    case SDL_SYSTEM_CURSOR_IBEAM:     shape = SCREEN_CURSOR_SHAPE_IBEAM; break;
++    case SDL_SYSTEM_CURSOR_WAIT:      shape = SCREEN_CURSOR_SHAPE_WAIT; break;
++    case SDL_SYSTEM_CURSOR_CROSSHAIR: shape = SCREEN_CURSOR_SHAPE_CROSS; break;
++    case SDL_SYSTEM_CURSOR_WAITARROW: shape = SCREEN_CURSOR_SHAPE_WAIT; break;
++    case SDL_SYSTEM_CURSOR_SIZENWSE:  shape = SCREEN_CURSOR_SHAPE_MOVE; break;
++    case SDL_SYSTEM_CURSOR_SIZENESW:  shape = SCREEN_CURSOR_SHAPE_MOVE; break;
++    case SDL_SYSTEM_CURSOR_SIZEWE:    shape = SCREEN_CURSOR_SHAPE_MOVE; break;
++    case SDL_SYSTEM_CURSOR_SIZENS:    shape = SCREEN_CURSOR_SHAPE_MOVE; break;
++    case SDL_SYSTEM_CURSOR_SIZEALL:   shape = SCREEN_CURSOR_SHAPE_MOVE; break;
++    case SDL_SYSTEM_CURSOR_NO:        shape = SCREEN_CURSOR_SHAPE_ARROW; break;
++    case SDL_SYSTEM_CURSOR_HAND:      shape = SCREEN_CURSOR_SHAPE_HAND; break;
++    }
++
++    cursor = SDL_calloc(1, sizeof(SDL_Cursor));
++    if (cursor) {
++        impl = SDL_calloc(1, sizeof(cursor_impl_t));;
++        if (impl == NULL) {
++            free(cursor);
++            SDL_OutOfMemory();
++        }
++        impl->realized_shape = shape;
++
++        screen_create_session_type(&session, context, SCREEN_EVENT_POINTER);
++        screen_set_session_property_iv(session, SCREEN_PROPERTY_CURSOR, &shape);
++
++        impl->session = session;
++        impl->is_visible = 1;
++        cursor->driverdata = (void*)impl;
++    } else {
++        SDL_OutOfMemory();
++    }
++
++    return cursor;
++}
++
++static int
++showCursor(SDL_Cursor * cursor)
++{
++    cursor_impl_t       *impl;
++    screen_session_t    session;
++    int shape;
++
++    // SDL does not provide information about previous visibility to its
++    // drivers. We need to track that ourselves.
++    if (cursor) {
++        impl = (cursor_impl_t*)cursor->driverdata;
++        if (impl->is_visible) {
++            return 0;
++        }
++        session = impl->session;
++        shape = impl->realized_shape;
++        impl->is_visible = 1;
++    } else {
++        cursor = SDL_GetCursor();
++        if (cursor == NULL) {
++            return -1;
++        }
++        impl = (cursor_impl_t*)cursor->driverdata;
++        if (!impl->is_visible) {
++            return 0;
++        }
++        session = impl->session;
++        shape = SCREEN_CURSOR_SHAPE_NONE;
++        impl->is_visible = 0;
++    }
++
++    if (screen_set_session_property_iv(session, SCREEN_PROPERTY_CURSOR, &shape) < 0) {
++        return -1;
++    }
++
++    return 0;
++}
++
++static void
++freeCursor(SDL_Cursor * cursor)
++{
++    cursor_impl_t *impl = (cursor_impl_t*)cursor->driverdata;
++
++    screen_destroy_session(impl->session);
++    SDL_free(impl);
++    SDL_free(cursor);
++}
++
++void
++initMouse(_THIS)
++{
++    SDL_Mouse *mouse = SDL_GetMouse();
++
++    mouse->CreateCursor = createCursor;
++    mouse->CreateSystemCursor = createSystemCursor;
++    mouse->ShowCursor = showCursor;
++    mouse->FreeCursor = freeCursor;
++
++    SDL_SetDefaultCursor(createCursor(NULL, 0, 0));
++}
+diff --git a/src/video/qnx/pointer.c b/src/video/qnx/pointer.c
+new file mode 100644
+index 000000000..399bf73d2
+--- /dev/null
++++ b/src/video/qnx/pointer.c
+@@ -0,0 +1,100 @@
++/*
++  Simple DirectMedia Layer
++  Copyright (C) 2025 BlackBerry Limited
++
++  This software is provided 'as-is', without any express or implied
++  warranty.  In no event will the authors be held liable for any damages
++  arising from the use of this software.
++
++  Permission is granted to anyone to use this software for any purpose,
++  including commercial applications, and to alter it and redistribute it
++  freely, subject to the following restrictions:
++
++  1. The origin of this software must not be misrepresented; you must not
++     claim that you wrote the original software. If you use this software
++     in a product, an acknowledgment in the product documentation would be
++     appreciated but is not required.
++  2. Altered source versions must be plainly marked as such, and must not be
++     misrepresented as being the original software.
++  3. This notice may not be removed or altered from any source distribution.
++*/
++
++#include "../../SDL_internal.h"
++#include "sdl_qnx.h"
++#include "../../SDL_internal.h"
++#include "SDL_mouse.h"
++#include "SDL_events.h"
++#include "SDL_video.h"
++#include "../../events/SDL_mouse_c.h"
++
++static int previous = 0;
++
++int screenToMouseButton(int x) {
++   //Screen only supports 3 mouse buttons.
++   switch(x){
++      case SCREEN_LEFT_MOUSE_BUTTON: // 1 << 0
++      return SDL_BUTTON_LEFT;
++      case SCREEN_RIGHT_MOUSE_BUTTON: //1 << 1
++      return SDL_BUTTON_RIGHT;
++      case SCREEN_MIDDLE_MOUSE_BUTTON: //1 << 2
++      return SDL_BUTTON_MIDDLE;
++   }
++   return 0;
++}
++
++void handlePointerEvent(screen_event_t event) {
++   int buttons = 0;
++   int mouse_wheel = 0;
++   int mouse_h_wheel = 0;
++   int pos[2] = {0,0};
++   int x_win = 0;
++   int y_win = 0;
++
++   SDL_Mouse *mouse;
++   SDL_Window *window;
++   SDL_VideoDisplay *display;
++   SDL_DisplayMode display_mode;
++
++   screen_get_event_property_iv(event, SCREEN_PROPERTY_BUTTONS, &buttons);
++   screen_get_event_property_iv(event, SCREEN_PROPERTY_MOUSE_WHEEL, &mouse_wheel);
++   screen_get_event_property_iv(event, SCREEN_PROPERTY_MOUSE_HORIZONTAL_WHEEL, &mouse_h_wheel);
++   screen_get_event_property_iv(event, SCREEN_PROPERTY_POSITION, pos);
++
++   mouse = SDL_GetMouse();
++
++   window = mouse->focus;
++   display = SDL_GetDisplayForWindow(window);
++   if (display == NULL) {
++       return;
++   }
++   display_mode = display->current_mode;
++
++   if ((window->x <= pos[0]) && (window->y <= pos[1])
++       && (pos[0] < (window->x + window->w))
++       && (pos[1] < (window->y + window->h))) {
++       // Capture movement
++       // Scale from position relative to display to position relative to window.
++       // TODO: We're ignoring the positibility of centered windows.
++       x_win = pos[0] - window->x;
++       y_win = pos[1] - window->y;
++
++       SDL_SendMouseMotion(window, mouse->mouseID, 0, x_win, y_win);
++
++       // Capture button presses
++       for(int i = 0; i < 3; ++i)
++       {
++           int ret = screenToMouseButton((buttons^previous) & (1 << i));
++           if(ret > 0)
++           {
++               SDL_SendMouseButton(window, mouse->mouseID, (buttons & (1 << i))?SDL_PRESSED:SDL_RELEASED, ret);
++           }
++       }
++
++       // Capture mouse wheel
++       // TODO: Verify this. I can at least confirm that this behaves the same
++       //       way as x11.
++       SDL_SendMouseWheel(window, 0, (float) mouse_wheel, (float) mouse_h_wheel, SDL_MOUSEWHEEL_NORMAL);
++   }
++
++   previous = buttons;
++}
+diff --git a/src/video/qnx/screen_consts.c b/src/video/qnx/screen_consts.c
+new file mode 100644
+index 000000000..52b3d95ef
+--- /dev/null
++++ b/src/video/qnx/screen_consts.c
+@@ -0,0 +1,5 @@
++#include <screen/screen.h>
++
++screen_context_t context;
++screen_event_t   event;
++screen_window_t  test_win;
+diff --git a/src/video/qnx/screen_consts.h b/src/video/qnx/screen_consts.h
+new file mode 100644
+index 000000000..0de13afec
+--- /dev/null
++++ b/src/video/qnx/screen_consts.h
+@@ -0,0 +1,5 @@
++#include <screen/screen.h>
++
++extern screen_context_t context;
++extern screen_event_t   event;
++extern screen_window_t  test_win;
+diff --git a/src/video/qnx/sdl_qnx.h b/src/video/qnx/sdl_qnx.h
+index 65e07988e..893b17560 100644
+--- a/src/video/qnx/sdl_qnx.h
++++ b/src/video/qnx/sdl_qnx.h
+@@ -1,6 +1,6 @@
+ /*
+   Simple DirectMedia Layer
+-  Copyright (C) 2017 BlackBerry Limited
++  Copyright (C) 2025 BlackBerry Limited
+ 
+   This software is provided 'as-is', without any express or implied
+   warranty.  In no event will the authors be held liable for any damages
+@@ -31,11 +31,25 @@ typedef struct
+     screen_window_t window;
+     EGLSurface      surface;
+     EGLConfig       conf;
++    SDL_GLContext   context;
++    int             resize;
++    int             fs_lastsize[2];
++    SDL_bool        is_fullscreen;
++    SDL_bool        has_focus;
+ } window_impl_t;
++ 
++typedef struct
++{
++    screen_session_t session;
++    int              realized_shape;
++    int              is_visible;
++} cursor_impl_t;
+ 
+ extern void handleKeyboardEvent(screen_event_t event);
++extern void handleJoystickEvent(screen_event_t event);
++extern void handlePointerEvent(screen_event_t event);
+ 
+-extern int glGetConfig(EGLConfig *pconf, int *pformat);
++extern int glGetConfig(window_impl_t  *impl, int *pformat);
+ extern int glLoadLibrary(_THIS, const char *name);
+ void *glGetProcAddress(_THIS, const char *proc);
+ extern SDL_GLContext glCreateContext(_THIS, SDL_Window *window);
+@@ -45,4 +59,6 @@ extern int glMakeCurrent(_THIS, SDL_Window * window, SDL_GLContext context);
+ extern void glDeleteContext(_THIS, SDL_GLContext context);
+ extern void glUnloadLibrary(_THIS);
+ 
++extern void initMouse(_THIS);
++
+ #endif
+diff --git a/src/video/qnx/video.c b/src/video/qnx/video.c
+index 924eaa307..767da68ec 100644
+--- a/src/video/qnx/video.c
++++ b/src/video/qnx/video.c
+@@ -1,6 +1,6 @@
+ /*
+   Simple DirectMedia Layer
+-  Copyright (C) 2017 BlackBerry Limited
++  Copyright (C) 2025 BlackBerry Limited
+ 
+   This software is provided 'as-is', without any express or implied
+   warranty.  In no event will the authors be held liable for any damages
+@@ -20,10 +20,13 @@
+ */
+ #include "../../SDL_internal.h"
+ #include "../SDL_sysvideo.h"
++#include "../../events/SDL_mouse_c.h"
++#include "../../events/SDL_windowevents_c.h"
+ #include "sdl_qnx.h"
++#include "screen_consts.h"
++#include <errno.h>
+ 
+-static screen_context_t context;
+-static screen_event_t   event;
++static int initialized = 0;
+ 
+ /**
+  * Initializes the QNX video plugin.
+@@ -35,22 +38,120 @@ static screen_event_t   event;
+ static int videoInit(_THIS)
+ {
+     SDL_VideoDisplay display;
++    SDL_DisplayMode  display_mode;
++    int size[2];
++    int index, index2;
++    int display_count, display_mode_count, active;
++    screen_display_t *screen_display;
++    screen_display_mode_t *screen_display_mode;
+ 
+     if (screen_create_context(&context, 0) < 0) {
++        fprintf(stderr, "qnx/video.c: | Context creation failure with errno %d\n", errno);
+         return -1;
+     }
+ 
+     if (screen_create_event(&event) < 0) {
++        fprintf(stderr, "qnx/video.c: | Event creation failure with errno %d\n", errno);
+         return -1;
+     }
+ 
+-    SDL_zero(display);
++    /* start with no displays and increment as attached displays are found */
++    if (screen_get_context_property_iv(context, SCREEN_PROPERTY_DISPLAY_COUNT, &display_count) < 0) {
++        fprintf(stderr, "qnx/video.c: | Display count retrieval failure with errno %d\n", errno);
++        return -1;
++    }
++
++    screen_display = calloc(display_count, sizeof(screen_display_t));
++    if (screen_display == NULL) {
++        fprintf(stderr, "qnx/video.c: | Displays allocation failure with errno %d\n", errno);
++        return SDL_OutOfMemory();
++    }
+ 
+-    if (SDL_AddVideoDisplay(&display, SDL_FALSE) < 0) {
++    if (screen_get_context_property_pv(context, SCREEN_PROPERTY_DISPLAYS, (void **)screen_display) < 0) {
++        fprintf(stderr, "qnx/video.c: | Displays retrieval failure with errno %d\n", errno);
++        free(screen_display);
+         return -1;
+     }
+ 
+-    _this->num_displays = 1;
++    /* create SDL displays based on display info from the screen API */
++    for (index = 0; index < display_count; index++) {
++        active = 0;
++        if (screen_get_display_property_iv(screen_display[index], SCREEN_PROPERTY_ATTACHED, &active) < 0) {
++            fprintf(stderr, "qnx/video.c: | Display count retrieval failure with errno %d\n", errno);
++            free(screen_display);
++            return -1;
++        }
++
++        if (active) {
++            if (screen_get_display_property_iv(screen_display[index], SCREEN_PROPERTY_SIZE, size) < 0) {
++                fprintf(stderr, "qnx/video.c: | Display size retrieval failure with errno %d\n", errno);
++                free(screen_display);
++                return -1;
++            }
++
++            SDL_zero(display);
++
++            SDL_zero(display_mode);
++            display_mode.w = size[0];
++            display_mode.h = size[1];
++            display_mode.refresh_rate = 60;
++            display_mode.format = SDL_PIXELFORMAT_RGBX8888;
++            display_mode.driverdata = NULL;
++
++            display.desktop_mode = display_mode;
++            display.current_mode = display_mode;
++
++            if (SDL_AddVideoDisplay(&display, SDL_FALSE) < 0) {
++                fprintf(stderr, "qnx/video.c: | SDL_AddVideoDisplay Failed.\n");
++                free(screen_display);
++                return -1;
++            }
++
++            /* create SDL display imodes based on display mode info from the display */
++            if (screen_get_display_property_iv(screen_display[index], SCREEN_PROPERTY_MODE_COUNT, &display_mode_count) < 0) {
++                fprintf(stderr, "qnx/video.c: | Display mode count retrieval failure with errno %d\n", errno);
++                free(screen_display);
++                return -1;
++            }
++
++            screen_display_mode = calloc(display_mode_count, sizeof(screen_display_mode_t));
++            if (screen_display_mode == NULL) {
++                fprintf(stderr, "qnx/video.c: | Display mode allocation failure with errno %d\n", errno);
++                free(screen_display);
++                return SDL_OutOfMemory();
++            }
++
++	    if(screen_get_display_modes(screen_display[index], display_mode_count, screen_display_mode) < 0) {
++                fprintf(stderr, "qnx/video.c: | Display mode retrieval failure with errno %d\n", errno);
++                free(screen_display);
++                return -1;
++            }
++
++            for (index2 = 0; index2 < display_mode_count; index2++) {
++                SDL_zero(display_mode);
++                display_mode.w = screen_display_mode[index2].width;
++                display_mode.h = screen_display_mode[index2].height;
++                display_mode.refresh_rate = screen_display_mode[index2].refresh;
++                display_mode.format = SDL_PIXELFORMAT_RGBX8888;
++
++                if (SDL_AddDisplayMode(&_this->displays[_this->num_displays-1], &display_mode) < 0) {
++                    fprintf(stderr, "qnx/video.c: | SDL_AddDisplayMode Failed.\n");
++                    free(screen_display);
++                    free(screen_display_mode);
++                    return -1;
++                }
++            }
++
++            free(screen_display_mode);
++        }
++    }
++
++    initMouse(_this);
++
++    initialized = 1;
++
++    free(screen_display);
++
+     return 0;
+ }
+ 
+@@ -69,9 +170,11 @@ static int createWindow(_THIS, SDL_Window *window)
+ {
+     window_impl_t   *impl;
+     int             size[2];
++    int             pos[2];
+     int             numbufs;
+     int             format;
+     int             usage;
++    int             has_focus_i;
+ 
+     impl = SDL_calloc(1, sizeof(*impl));
+     if (!impl) {
+@@ -80,6 +183,7 @@ static int createWindow(_THIS, SDL_Window *window)
+ 
+     // Create a native window.
+     if (screen_create_window(&impl->window, context) < 0) {
++        fprintf(stderr, "qnx/video.c: | create window failed with errno %d\n", errno);
+         goto fail;
+     }
+ 
+@@ -89,24 +193,34 @@ static int createWindow(_THIS, SDL_Window *window)
+ 
+     if (screen_set_window_property_iv(impl->window, SCREEN_PROPERTY_SIZE,
+                                       size) < 0) {
++        fprintf(stderr, "qnx/video.c: | Setting SCREEN_PROPERTY_SIZE failed with errno %d\n", errno);
+         goto fail;
+     }
+ 
+     if (screen_set_window_property_iv(impl->window, SCREEN_PROPERTY_SOURCE_SIZE,
+                                       size) < 0) {
++        fprintf(stderr, "qnx/video.c: | Setting SCREEN_PROPERTY_SOURCE_SIZE failed with errno %d\n", errno);
+         goto fail;
+     }
+ 
++    pos[0] = window->x;
++    pos[1] = window->y;
++    if (screen_set_window_property_iv(impl->window, SCREEN_PROPERTY_POSITION, pos) < 0) {
++        SDL_SetError("qnx/video.c: | Setting SCREEN_PROPERTY_POSITION failed with errno %d\n", errno);
++    }
++
+     // Create window buffer(s).
+     if (window->flags & SDL_WINDOW_OPENGL) {
+-        if (glGetConfig(&impl->conf, &format) < 0) {
++        if (glGetConfig(impl, &format) < 0) {
++            fprintf(stderr, "qnx/video.c: | Getting GL config failed ...n");
+             goto fail;
+         }
+         numbufs = 2;
+ 
+-        usage = SCREEN_USAGE_OPENGL_ES2;
++        usage = SCREEN_USAGE_OPENGL_ES2 | SCREEN_USAGE_OPENGL_ES3;
+         if (screen_set_window_property_iv(impl->window, SCREEN_PROPERTY_USAGE,
+                                           &usage) < 0) {
++            fprintf(stderr, "qnx/video.c: | SDL could not set screen usage to OPENGL_ES2, OPENGL_ES3 \n");
+             return -1;
+         }
+     } else {
+@@ -117,14 +231,23 @@ static int createWindow(_THIS, SDL_Window *window)
+     // Set pixel format.
+     if (screen_set_window_property_iv(impl->window, SCREEN_PROPERTY_FORMAT,
+                                       &format) < 0) {
++        fprintf(stderr, "qnx/video.c: | Setting SCREEN_PROPERTY_FORMAT failed with errno %d\n", errno);
+         goto fail;
+     }
+ 
+     // Create buffer(s).
+-    if (screen_create_window_buffers(impl->window, numbufs) < 0) {
++    if (screen_create_window_buffers(impl->window, numbufs>0?numbufs:1) < 0) {
++        fprintf(stderr, "qnx/video.c: | Creating window buffers failed with errno %d\n", errno);
+         goto fail;
+     }
+ 
++    // Get initial focus state. Fallback to true.
++    if(screen_get_window_property_iv(impl->window, SCREEN_PROPERTY_FOCUS, &has_focus_i) < 0){
++        impl->has_focus = SDL_TRUE;
++    } else {
++        impl->has_focus = has_focus_i ? SDL_TRUE : SDL_FALSE;
++    }
++
+     window->driverdata = impl;
+     return 0;
+ 
+@@ -142,7 +265,7 @@ fail:
+  * that the buffer is actually created in createWindow().
+  * @param       _THIS
+  * @param       window  SDL window to get the buffer for
+- * @param[out]  pixles  Holds a pointer to the window's buffer
++ * @param[out]  pixels  Holds a pointer to the window's buffer
+  * @param[out]  format  Holds the pixel format for the buffer
+  * @param[out]  pitch   Holds the number of bytes per line
+  * @return  0 if successful, -1 on error
+@@ -150,27 +273,35 @@ fail:
+ static int createWindowFramebuffer(_THIS, SDL_Window * window, Uint32 * format,
+                         void ** pixels, int *pitch)
+ {
++    int buffer_count;
+     window_impl_t   *impl = (window_impl_t *)window->driverdata;
+-    screen_buffer_t buffer;
++    screen_buffer_t *buffer;
+ 
+     // Get a pointer to the buffer's memory.
++    if (screen_get_window_property_iv(impl->window, SCREEN_PROPERTY_BUFFER_COUNT,
++        &buffer_count) < 0) {
++        return -1;
++    }
++    buffer = calloc(buffer_count, sizeof(screen_buffer_t));
++
+     if (screen_get_window_property_pv(impl->window, SCREEN_PROPERTY_BUFFERS,
+-                                      (void **)&buffer) < 0) {
++                                      (void **)buffer) < 0) {
++        fprintf(stderr, "qnx/video.c: | Failure to get screen buffers %d\n", errno);
+         return -1;
+     }
+ 
+-    if (screen_get_buffer_property_pv(buffer, SCREEN_PROPERTY_POINTER,
++    if (screen_get_buffer_property_pv(*buffer, SCREEN_PROPERTY_POINTER,
+                                       pixels) < 0) {
+         return -1;
+     }
+ 
+     // Set format and pitch.
+-    if (screen_get_buffer_property_iv(buffer, SCREEN_PROPERTY_STRIDE,
++    if (screen_get_buffer_property_iv(*buffer, SCREEN_PROPERTY_STRIDE,
+                                       pitch) < 0) {
+         return -1;
+     }
+ 
+-    *format = SDL_PIXELFORMAT_RGB888;
++    *format = SDL_PIXELFORMAT_RGBX8888;
+     return 0;
+ }
+ 
+@@ -185,16 +316,42 @@ static int createWindowFramebuffer(_THIS, SDL_Window * window, Uint32 * format,
+ static int updateWindowFramebuffer(_THIS, SDL_Window *window, const SDL_Rect *rects,
+                         int numrects)
+ {
++    int buffer_count, *rects_int;
+     window_impl_t   *impl = (window_impl_t *)window->driverdata;
+-    screen_buffer_t buffer;
++    screen_buffer_t *buffer;
++
++    if (screen_get_window_property_iv(impl->window, SCREEN_PROPERTY_BUFFER_COUNT,
++        &buffer_count) < 0) {
++        return -1;
++    }
++    buffer = calloc(buffer_count, sizeof(screen_buffer_t));
+ 
+     if (screen_get_window_property_pv(impl->window, SCREEN_PROPERTY_BUFFERS,
+-                                      (void **)&buffer) < 0) {
++                                      (void **)buffer) < 0) {
++        fprintf(stderr, "qnx/video.c: | Failure to get screen buffers %d\n", errno);
+         return -1;
+     }
+ 
+-    screen_post_window(impl->window, buffer, numrects, (int *)rects, 0);
+-    screen_flush_context(context, 0);
++    if(numrects>0){
++        rects_int = calloc(4*numrects, sizeof(int));
++
++        for(int i = 0; i < numrects; i++){
++            rects_int[4*i]   = rects[i].x;
++            rects_int[4*i+1] = rects[i].y;
++            rects_int[4*i+2] = rects[i].w;
++            rects_int[4*i+3] = rects[i].h;
++        }
++
++        if(screen_post_window(impl->window, buffer[0], numrects, rects_int, 0)) {
++            fprintf(stderr, "qnx/video.c: | Screen Post Window error - errno %d\n", errno);
++            return -1;
++        }
++        if(screen_flush_context(context, 0)) {
++            fprintf(stderr, "qnx/video.c: | Screen flush context error - errno %d\n", errno);
++            return -1;
++        }
++    }
++
+     return 0;
+ }
+ 
+@@ -204,13 +361,44 @@ static int updateWindowFramebuffer(_THIS, SDL_Window *window, const SDL_Rect *re
+  */
+ static void pumpEvents(_THIS)
+ {
++    SDL_Window      *window;
++    window_impl_t   *impl;
+     int             type;
++    int             has_focus_i;
++    SDL_bool        has_focus;
++
++    // Let apps know the state of focus.
++    for (window = _this->windows; window; window = window->next) {
++        impl = (window_impl_t *)window->driverdata;
++        if (screen_get_window_property_iv(impl->window, SCREEN_PROPERTY_FOCUS, &has_focus_i) < 0){
++            printf("qnx/video.c: | Get focus failed with errno %d\n", errno);
++            continue;
++        }
++        has_focus = has_focus_i ? SDL_TRUE : SDL_FALSE;
++
++        if (impl->has_focus != has_focus) {
++            // Assume here that we are always inside the window, since there is
++            // currently no x/y positioning.
++            SDL_SendWindowEvent(window, (has_focus ? SDL_WINDOWEVENT_FOCUS_GAINED : SDL_WINDOWEVENT_FOCUS_LOST), 0, 0);
++            SDL_SendWindowEvent(window, (has_focus ? SDL_WINDOWEVENT_ENTER : SDL_WINDOWEVENT_LEAVE), 0, 0);
++            // Update the SDL mouse to track the window it's focused on.
++            SDL_SetMouseFocus(window);
++        }
++    }
+ 
+     for (;;) {
++        if(!context) {
++            break;
++	}
++
+         if (screen_get_event(context, event, 0) < 0) {
+             break;
+         }
+ 
++        if(!event) {
++            break;
++	}
++
+         if (screen_get_event_property_iv(event, SCREEN_PROPERTY_TYPE, &type)
+             < 0) {
+             break;
+@@ -220,11 +408,23 @@ static void pumpEvents(_THIS)
+             break;
+         }
+ 
++        //fprintf(stderr, "qnx/video.c: | event: type: %d\n", type);
+         switch (type) {
+         case SCREEN_EVENT_KEYBOARD:
+             handleKeyboardEvent(event);
+             break;
+ 
++        case SCREEN_EVENT_POINTER:
++            handlePointerEvent(event);
++            break;
++
++#ifdef SDL_JOYSTICK_QNX
++        case SCREEN_EVENT_GAMEPAD:
++        case SCREEN_EVENT_JOYSTICK:
++            handleJoystickEvent(event);
++            break;
++#endif
++
+         default:
+             break;
+         }
+@@ -244,9 +444,16 @@ static void setWindowSize(_THIS, SDL_Window *window)
+     size[0] = window->w;
+     size[1] = window->h;
+ 
++    if (screen_destroy_window_buffers(impl->window) < 0) {
++        return;
++    }
++    impl->resize = 1;
++
+     screen_set_window_property_iv(impl->window, SCREEN_PROPERTY_SIZE, size);
+     screen_set_window_property_iv(impl->window, SCREEN_PROPERTY_SOURCE_SIZE,
+                                   size);
++
++    screen_create_window_buffers(impl->window, (window->flags & SDL_WINDOW_OPENGL) ? 2 : 1);
+ }
+ 
+ /**
+@@ -306,7 +513,7 @@ static void deleteDevice(SDL_VideoDevice *device)
+  * @param   devindex    Unused
+  * @return  Initialized device if successful, NULL otherwise
+  */
+-static SDL_VideoDevice *createDevice(int devindex)
++static SDL_VideoDevice *createDevice(void)
+ {
+     SDL_VideoDevice *device;
+ 

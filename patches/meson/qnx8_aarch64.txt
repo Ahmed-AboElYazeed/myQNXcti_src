@@ -1,0 +1,14 @@
+[binaries]
+c = 'ntoaarch64-gcc'
+cpp = 'ntoaarch64-g++'
+ar = 'ntoaarch64-ar'
+as = 'ntoaarch64-as'
+ranlib = 'ntoaarch64-ranlib'
+strip = 'ntoaarch64-strip'
+ld = 'ntoaarch64-ld'
+
+[host_machine]
+system = 'qnx'
+cpu_family = 'aarch64'
+cpu = 'aarch64'
+endian = 'little'

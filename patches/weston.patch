@@ -1,0 +1,31 @@
+diff --git a/shared/image-loader.c b/shared/image-loader.c
+index 3ddc69b3..63a67ff2 100644
+--- a/shared/image-loader.c
++++ b/shared/image-loader.c
+@@ -157,16 +157,16 @@ load_jpeg_image(struct jpeg_decompress_struct *cinfo,
+ // fixes: undefined reference to `jpeg_read_icc_profile'
+ // this symbol is not found in libjpeg.so.9 from qnx sdp,
+ // QNX TODO: update this when symbol becomes available
+-static bool
+-jpeg_read_icc_profile(j_decompress_ptr cinfo, 
+-                      JOCTET **icc_data_ptr,
+-                      unsigned int *icc_data_len)
+-{
+-    // For now, return false to indicate no ICC profile
+-    *icc_data_ptr = NULL;
+-    *icc_data_len = 0;
+-    return false;
+-}
++//static bool
++//jpeg_read_icc_profile(j_decompress_ptr cinfo, 
++//                      JOCTET **icc_data_ptr,
++//                      unsigned int *icc_data_len)
++//{
++//    // For now, return false to indicate no ICC profile
++//    *icc_data_ptr = NULL;
++//    *icc_data_len = 0;
++//    return false;
++//}
+ #endif
+ 
+ static int

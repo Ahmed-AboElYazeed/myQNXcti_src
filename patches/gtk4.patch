@@ -1,0 +1,88 @@
+diff --git i/gdk/qnxscreen/gdkglcontext-qnxscreen.c w/gdk/qnxscreen/gdkglcontext-qnxscreen.c
+index 930fa34c92..3577e3073b 100644
+--- i/gdk/qnxscreen/gdkglcontext-qnxscreen.c
++++ w/gdk/qnxscreen/gdkglcontext-qnxscreen.c
+@@ -38,6 +38,43 @@ gdk_qnxscreen_gl_context_begin_frame (GdkDrawContext *draw_context, GdkMemoryDep
+ static void
+ gdk_qnxscreen_gl_context_end_frame (GdkDrawContext *draw_context, cairo_region_t *painted)
+ {
++  int red = -1;
++  int green = -1;
++  int blue = -1;
++  int alpha = -1;
++  static int width = -1;
++  static int height = -1;
++  static unsigned char *pixels = NULL;
++
++  glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_BACK, GL_FRAMEBUFFER_ATTACHMENT_RED_SIZE, &red);
++  glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_BACK, GL_FRAMEBUFFER_ATTACHMENT_GREEN_SIZE, &green);
++  glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_BACK, GL_FRAMEBUFFER_ATTACHMENT_BLUE_SIZE, &blue);
++  glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_BACK, GL_FRAMEBUFFER_ATTACHMENT_ALPHA_SIZE, &alpha);
++
++  //printf("\n\r\n\rRed: %d, Green: %d, Blue: %d, alpha: %d\n\r\n\r", red, green, blue, alpha);
++
++  if (red == 8 && green == 8 && blue == 8 && alpha == 8) {
++      GLint dims[4] = {0};
++      glGetIntegerv(GL_VIEWPORT, dims);
++      GLint fbWidth = dims[2];
++      GLint fbHeight = dims[3];
++
++      // Explicit check for pixels pointer in case width or height query returned a negative number for any reason
++      if (fbWidth != width || fbHeight != height || !pixels) {
++          free(pixels);
++
++          width = max(fbWidth, 0);
++          height = max(fbHeight, 0);
++
++          printf("\n\r\n\r Allocated for, updated: %d, %d \n\r\n\r", width, height);
++          pixels = malloc(width * height * 4);
++      }
++
++      glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
++  } else {
++    printf("\n\r\n\r Unsupported RGBA format (%d, %d, %d, %d) bits\n\r\n\r", red, green, blue, alpha);
++  }
++
+   GDK_DRAW_CONTEXT_CLASS (gdk_qnxscreen_gl_context_parent_class)->end_frame (draw_context, painted);
+ }
+ 
+diff --git a/meson_options.txt b/meson_options.txt
+index b64cd9bc9e..a2686691f7 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -60,7 +60,7 @@ option('print-cups',
+ 
+ option('vulkan',
+        type: 'feature',
+-       value: 'enabled',
++       value: 'disabled',
+        description : 'Enable Vulkan support including the Vulkan renderer')
+ 
+ option('cloudproviders',
+diff --git a/qnx_examples/qnx_examples_common.mk b/qnx_examples/qnx_examples_common.mk
+index 8608033073..136a49611a 100644
+--- a/qnx_examples/qnx_examples_common.mk
++++ b/qnx_examples/qnx_examples_common.mk
+@@ -7,11 +7,11 @@ include $(QCONFIG)
+ EXAMPLE_ROOT=$(PROJECT_ROOT)
+ GTK_ROOT=$(EXAMPLE_ROOT)/../..
+ 
+-INSTALLDIR=usr/local/bin
++INSTALLDIR=usr/bin
+ 
+ EXTRA_SRCVPATH=$(PROJECT_ROOT)/src
+ 
+-GTK4_INSTALL_ROOT=$(QNX_STAGE)/$(CPUDIR)/usr/local
++GTK4_INSTALL_ROOT=$(QNX_STAGE)/$(CPUDIR)/usr
+ 
+ EXTRA_INCVPATH += $(GTK_ROOT)/_build_qnx_$(CPUDIR)
+ EXTRA_INCVPATH += $(GTK4_INSTALL_ROOT)/include/
+@@ -34,7 +34,7 @@ EXTRA_LIBVPATH += $(GTK4_INSTALL_ROOT)/lib
+ LDFLAGS += -N2048K
+ 
+ # Default image location on the target is at /base/gtk4/etc/images
+-CCFLAGS+=-DIMAGE_RESOURCE_DIR=\"/data/home/qnxuser/share/images\"
++CCFLAGS+=-DIMAGE_RESOURCE_DIR=\"/usr/share/gtk4/images\"
+ 
+ # Uncomment this line, or add IOSOCK_BUILD=1 to "make install" command line, if linking against iosock GTK4 libraries
+ # i.e. IOSOCK_BUILD=1 make clean install

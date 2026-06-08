@@ -1,0 +1,36 @@
+diff --git a/src/auto/configure b/src/auto/configure
+index 8e9f6ee3a..f54a5d87d 100755
+--- a/src/auto/configure
++++ b/src/auto/configure
+@@ -9807,6 +9807,11 @@ printf "%s\n" "automatic GUI support" >&6; }
+     		gui_auto=yes ;;
+     photon)	{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: Photon GUI support" >&5
+ printf "%s\n" "Photon GUI support" >&6; } ;;
++    gtk3)	{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: GTK+ 3.x GUI support" >&5
++printf "%s\n" "GTK+ 3.x GUI support" >&6; }
++                with_x=no
++                SKIP_PHOTON=YES
++		SKIP_GTK3=;;
+     *)		{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: Sorry, $enable_gui GUI is not supported" >&5
+ printf "%s\n" "Sorry, $enable_gui GUI is not supported" >&6; }
+ 		SKIP_PHOTON=YES ;;
+diff --git a/src/feature.h b/src/feature.h
+index bcfc4a40c..49bdb68f9 100644
+--- a/src/feature.h
++++ b/src/feature.h
+@@ -802,8 +802,15 @@
+  *			clipboard.  Only works if HAVE_X11 is also defined.
+  */
+ #if defined(FEAT_NORMAL) || defined(FEAT_GUI_MOTIF)
++#if defined(__QNX__)
++# undef WANT_X11
++# undef HAVE_X11
++# define NO_X11_INCLUDES
++# undef FEAT_GUI_MSWIN
++#else
+ # define WANT_X11
+ #endif
++#endif
+ 
+ /*
+  * XSMP - X11 Session Management Protocol

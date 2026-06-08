@@ -1,0 +1,10 @@
+#
+# Write a Hello World Python script
+#
+
+import sys
+
+if __name__ == '__main__':
+    print("Hello World!")
+
+    sys.exit(0)

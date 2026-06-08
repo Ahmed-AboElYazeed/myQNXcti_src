@@ -1,0 +1,14 @@
+[binaries]
+c = 'ntox86_64-gcc'
+cpp = 'ntox86_64-g++'
+ar = 'ntox86_64-ar'
+as = 'ntox86_64-as'
+ranlib = 'ntox86_64-ranlib'
+strip = 'ntox86_64-strip'
+ld = 'ntox86_64-ld'
+
+[host_machine]
+system = 'qnx'
+cpu_family = 'x86_64'
+cpu = 'x86_64'
+endian = 'little'

@@ -1,0 +1,14 @@
+/source/
+/stage/
+/qnxuser_projects/
+/qnxuser_repos/
+/qnxuser_solutions/
+.vscode/
+*/stage
+/.vscode
+
+# Build dependencies (they will be downloaded automaticly when you build)
+*.tar.gz
+boost/
+vsomeip/
+capicxx-*/

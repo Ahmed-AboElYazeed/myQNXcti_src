@@ -1,0 +1,13 @@
+diff --git a/src/meson.build b/src/meson.build
+index 101bf269..0d8131c3 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -55,7 +55,7 @@ subdir('savers')
+ 
+ thorvg_lib_dep = [common_dep, utils_dep, loader_dep, saver_dep]
+ 
+-if get_option('threads') and host_machine.system() != 'windows' and host_machine.system() != 'android'
++if get_option('threads') and host_machine.system() != 'windows' and host_machine.system() != 'android' and host_machine.system() != 'qnx'
+     thread_dep = meson.get_compiler('cpp').find_library('pthread')
+     thorvg_lib_dep += [thread_dep]
+ endif

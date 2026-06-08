@@ -1,0 +1,15 @@
+diff --git a/ports/gtk/common.mk b/ports/gtk/common.mk
+index 373cdd2..d376686 100644
+--- a/ports/gtk/common.mk
++++ b/ports/gtk/common.mk
+@@ -145,6 +145,10 @@ qnx_cross.cfg: $(PROJECT_ROOT)/qnx_cross.cfg.in
+ 	# PREPEND_C_CXXFLAGS need to be converted to Meson list format
+ 	sed -i "s|PREPEND_C_CXXFLAGS|$(foreach flag,$(PREPEND_C_CXXFLAGS),'$(flag)',)|" $@
+ 
++# extra paths for linking
++EXTRA_VLIBPATH += $(INSTALL_ROOT_WITH_PREFIX)/lib
++
++
+ # Meson setup configures the ninja build file.
+ # Reconfiguration is required if any of the prebuilt toolchain files change.
+ # Thus the requisite includes all prebuilt files, and meson is invoked with --reconfigure.
