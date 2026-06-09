@@ -99,7 +99,7 @@ int main() {
         StatusReporter::instance().pushLog("[GW] Update complete — ECU rebooting");
 
         // Re-query version after update completes (give ECU time to reboot)
-        std::this_thread::sleep_for(std::chrono::seconds(15));
+        std::this_thread::sleep_for(std::chrono::seconds(300));
         queryYoctoVersion();
     }
     return 0;
