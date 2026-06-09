@@ -1,26 +1,28 @@
+# ── OTA Gateway Application ───────────────────────────────────────────────────
 OTA_GW_DIR  = $(CURDIR)/ota-gateway
 OTA_GW_SRCS = $(OTA_GW_DIR)/main.cpp \
               $(OTA_GW_DIR)/TcpReceiver.cpp \
               $(OTA_GW_DIR)/ImageVerifier.cpp \
               $(OTA_GW_DIR)/YoctoForwarder.cpp \
+              $(OTA_GW_DIR)/StatusReporter.cpp \
               $(OTA_GW_DIR)/src-gen/v1/com/myapp/ota/OtaUpdateSomeIPDeployment.cpp \
               $(OTA_GW_DIR)/src-gen/v1/com/myapp/ota/OtaUpdateSomeIPProxy.cpp \
               $(OTA_GW_DIR)/src-gen/v1/com/myapp/ota/OtaUpdateSomeIPStubAdapter.cpp
 
 OTA_GW_HDRS = $(OTA_GW_DIR)/TcpReceiver.hpp \
               $(OTA_GW_DIR)/ImageVerifier.hpp \
-              $(OTA_GW_DIR)/YoctoForwarder.hpp
+              $(OTA_GW_DIR)/YoctoForwarder.hpp \
+              $(OTA_GW_DIR)/StatusReporter.hpp
 
 source/ota-gateway-ready:
 	@mkdir -p source
 	touch $@
 
-# Sentinel now depends on ALL source and header files
-# Any edit to .cpp or .hpp triggers a full rebuild automatically
 source/ota-gateway-built-$(QNX_ARCH): source/ota-gateway-ready \
                                        $(OTA_GW_SRCS) $(OTA_GW_HDRS)
 	@mkdir -p $(CURDIR)/stage/usr/bin
 
+	# Stub out Linux-only symbols not available on QNX
 	echo 'int eventfd(unsigned int i, int f){ return -1; }' \
 		> $(OTA_GW_DIR)/stub_eventfd.c
 	qcc -Vgcc_nto$(CC_TARGET) -D_QNX_SOURCE \
