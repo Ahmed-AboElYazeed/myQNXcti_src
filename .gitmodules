@@ -1,0 +1,3 @@
+[submodule "ota-gateway"]
+	path = ota-gateway
+	url = git@github.com:Ahmed-AboElYazeed/OTA_Project_QNXpart.git
