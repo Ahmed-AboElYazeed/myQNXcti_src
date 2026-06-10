@@ -12,3 +12,5 @@
 boost/
 vsomeip/
 capicxx-*/
+
+*.bak
